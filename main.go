@@ -2,15 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/isaacwassouf/cryptography-service/database"
 	pb "github.com/isaacwassouf/cryptography-service/protobufs/cryptography_service"
+	"github.com/isaacwassouf/cryptography-service/utils"
 )
 
 type CryptographyServiceManager struct {
@@ -19,11 +27,79 @@ type CryptographyServiceManager struct {
 }
 
 func (s *CryptographyServiceManager) Encrypt(ctx context.Context, in *pb.EncryptRequest) (*pb.EncryptResponse, error) {
-	return &pb.EncryptResponse{Ciphertext: "EncryptedData"}, nil
+	adminHashedPassword, err := utils.GetAdminHashedPassword(s.cryptographyServiceDB.Db)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to get the admin hashed password")
+	}
+
+	// Derive the key and salt from the adminHashedPassword
+	key, salt := utils.DeriveKey(adminHashedPassword, nil)
+
+	// Generate a random 12 byte IV
+	iv := make([]byte, 12)
+	rand.Read(iv)
+
+	// Create a new AES cipher block from the key
+	aesCipher, _ := aes.NewCipher(key)
+	// Create a new GCM block cipher
+	aesgcm, _ := cipher.NewGCM(aesCipher)
+	// Encrypt the data
+	data := aesgcm.Seal(nil, iv, []byte(in.Plaintext), nil)
+
+	// Encode the data to a hex string
+	encryptedData := hex.EncodeToString(salt) + "-" + hex.EncodeToString(iv) + "-" + hex.EncodeToString(data)
+
+	return &pb.EncryptResponse{Ciphertext: encryptedData}, nil
 }
 
 func (s *CryptographyServiceManager) Decrypt(ctx context.Context, in *pb.DecryptRequest) (*pb.DecryptResponse, error) {
-	return &pb.DecryptResponse{Plaintext: "PlaintextData"}, nil
+	partitions := strings.Split(in.Ciphertext, "-")
+	if len(partitions) != 3 {
+		return nil, status.Error(codes.InvalidArgument, "invalid ciphertext")
+	}
+
+	salt, err := hex.DecodeString(partitions[0])
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid ciphertext")
+	}
+
+	iv, err := hex.DecodeString(partitions[1])
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid ciphertext")
+	}
+
+	data, err := hex.DecodeString(partitions[2])
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid ciphertext")
+	}
+
+	adminHashedPassword, err := utils.GetAdminHashedPassword(s.cryptographyServiceDB.Db)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to get the admin hashed password")
+	}
+
+	// Derive the key and salt from the GetAdminHashedPassword
+	key, _ := utils.DeriveKey(adminHashedPassword, salt)
+
+	// Create a new AES cipher block from the DeriveKey
+	aesCipher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to create a new AES cipher block")
+	}
+
+	// Create a new GCM block cipher
+	aesgcm, err := cipher.NewGCM(aesCipher)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to create a new GCM block ciphertext")
+	}
+
+	// Decrypt the data
+	plaintext, err := aesgcm.Open(nil, iv, data, nil)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to decrypt the data")
+	}
+
+	return &pb.DecryptResponse{Plaintext: string(plaintext)}, nil
 }
 
 func main() {
