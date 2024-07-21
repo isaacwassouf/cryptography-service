@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"os"
 
 	"golang.org/x/crypto/pbkdf2"
 
@@ -26,4 +27,13 @@ func DeriveKey(password string, salt []byte) ([]byte, []byte) {
 		rand.Read(salt)
 	}
 	return pbkdf2.Key([]byte(password), salt, consts.ROUNDS, 32, sha256.New), salt
+}
+
+func GetGoEnv() string {
+	environment, found := os.LookupEnv("GO_ENV")
+	if !found {
+		return "development"
+	}
+
+	return environment
 }

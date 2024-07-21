@@ -103,10 +103,15 @@ func (s *CryptographyServiceManager) Decrypt(ctx context.Context, in *pb.Decrypt
 }
 
 func main() {
-	// load the SMTP configuration from the .env file
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Failed to load the .env file: ", err)
+	environment := utils.GetGoEnv()
+
+	if environment == "development" {
+
+		// load the SMTP configuration from the .env file
+		err := godotenv.Load()
+		if err != nil {
+			log.Fatal("Failed to load the .env file: ", err)
+		}
 	}
 
 	// Create a new schemaManagementServiceDB
