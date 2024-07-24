@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -35,19 +36,27 @@ func (s *CryptographyServiceManager) Encrypt(ctx context.Context, in *pb.Encrypt
 	// Derive the key and salt from the adminHashedPassword
 	key, salt := utils.DeriveKey(adminHashedPassword, nil)
 
-	// Generate a random 12 byte IV
-	iv := make([]byte, 12)
-	rand.Read(iv)
+	iv := make([]byte, aes.BlockSize)
+	_, err = rand.Read(iv)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to generate IV")
+	}
 
-	// Create a new AES cipher block from the key
-	aesCipher, _ := aes.NewCipher(key)
-	// Create a new GCM block cipher
-	aesgcm, _ := cipher.NewGCM(aesCipher)
-	// Encrypt the data
-	data := aesgcm.Seal(nil, iv, []byte(in.Plaintext), nil)
+	aesCipher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to create AES cipher")
+	}
 
-	// Encode the data to a hex string
-	encryptedData := hex.EncodeToString(salt) + "-" + hex.EncodeToString(iv) + "-" + hex.EncodeToString(data)
+	paddedData, err := utils.PKCS7Padding([]byte(in.Plaintext), aes.BlockSize)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	ciphertext := make([]byte, len(paddedData))
+	mode := cipher.NewCBCEncrypter(aesCipher, iv)
+	mode.CryptBlocks(ciphertext, paddedData)
+
+	encryptedData := hex.EncodeToString(salt) + "-" + hex.EncodeToString(iv) + "-" + hex.EncodeToString(ciphertext)
 
 	return &pb.EncryptResponse{Ciphertext: encryptedData}, nil
 }
@@ -68,7 +77,7 @@ func (s *CryptographyServiceManager) Decrypt(ctx context.Context, in *pb.Decrypt
 		return nil, status.Error(codes.InvalidArgument, "invalid ciphertext")
 	}
 
-	data, err := hex.DecodeString(partitions[2])
+	ciphertext, err := hex.DecodeString(partitions[2])
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid ciphertext")
 	}
@@ -81,22 +90,18 @@ func (s *CryptographyServiceManager) Decrypt(ctx context.Context, in *pb.Decrypt
 	// Derive the key and salt from the GetAdminHashedPassword
 	key, _ := utils.DeriveKey(adminHashedPassword, salt)
 
-	// Create a new AES cipher block from the DeriveKey
 	aesCipher, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to create a new AES cipher block")
+		return nil, status.Error(codes.Internal, "failed to create AES cipher")
 	}
 
-	// Create a new GCM block cipher
-	aesgcm, err := cipher.NewGCM(aesCipher)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to create a new GCM block ciphertext")
-	}
+	plaintext := make([]byte, len(ciphertext))
+	mode := cipher.NewCBCDecrypter(aesCipher, iv)
+	mode.CryptBlocks(plaintext, ciphertext)
 
-	// Decrypt the data
-	plaintext, err := aesgcm.Open(nil, iv, data, nil)
+	plaintext, err = utils.PKCS7UnPadding(plaintext)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to decrypt the data")
+		return nil, status.Error(codes.Internal, "failed to unpad plaintext")
 	}
 
 	return &pb.DecryptResponse{Plaintext: string(plaintext)}, nil
