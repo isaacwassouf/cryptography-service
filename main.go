@@ -29,7 +29,7 @@ type CryptographyServiceManager struct {
 func (s *CryptographyServiceManager) Encrypt(ctx context.Context, in *pb.EncryptRequest) (*pb.EncryptResponse, error) {
 	adminHashedPassword, err := utils.GetAdminHashedPassword(s.cryptographyServiceDB.Db)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to get the admin hashed password")
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	// Derive the key and salt from the adminHashedPassword
